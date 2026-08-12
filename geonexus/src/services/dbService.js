@@ -76,3 +76,36 @@ export const subscribeToCollection = (path, callback) => {
     }
   });
 };
+
+export const updateTechTicketStatus = async (ticketId, techId, ticketStatus, techStatus) => {
+  try {
+    await update(ref(db, `tickets/${ticketId}`), { 
+      status: ticketStatus,
+      updatedAt: Date.now()
+    });
+
+    await update(ref(db, `technicians/${techId}`), {
+      status: techStatus,
+      currentTicketId: ticketStatus === 'resolved' ? null : ticketId
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error("Erro ao atualizar status do atendimento:", error);
+    return { success: false, error };
+  }
+};
+
+// Função adicionada para atualização do status direto pelo app mobile
+export const updateTechStatusInDB = async (techId, techStatus) => {
+  try {
+    await update(ref(db, `technicians/${techId}`), {
+      status: techStatus,
+      updatedAt: Date.now()
+    });
+    return { success: true };
+  } catch (error) {
+    console.error("Erro ao atualizar status do técnico:", error);
+    return { success: false, error };
+  }
+};
