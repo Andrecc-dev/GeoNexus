@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Activity, Users, AlertTriangle, Database, ShieldAlert, Truck, 
-  Wrench, PlusCircle, Navigation, DollarSign, X, Building2, Smartphone, BarChart3, Clock, Loader2, Search, UserPlus
+  Wrench, PlusCircle, Navigation, DollarSign, X, Building2, Smartphone, 
+  BarChart3, Clock, Loader2, Search, UserPlus, Zap, ShieldCheck, CheckCircle2
 } from 'lucide-react';
 import { seedDatabase, subscribeToCollection, createTicketInDB, dispatchTicketToTech, dispatchTicketToContractor } from './services/dbService';
-import { rankTechniciansForTicket, getCoordinatesFromAddress } from './services/geoService';
+import { rankTechniciansForTicket, getCoordinatesFromAddress, findBestTechForTicket } from './services/geoService';
+import { calculateContractorCost } from './services/contratoService';
 import { getAddressFromCep } from './utils/geoUtils';
 import Map from './components/Map';
 import TechMobileView from './components/TechMobileView';
@@ -35,6 +37,7 @@ export default function App() {
   const [tickets, setTickets] = useState([]);
   const [contractors, setContractors] = useState([]);
   const [selectedTicket, setSelectedTicket] = useState(null);
+  const [dispatchTab, setDispatchTab] = useState('internal'); // 'internal' ou 'contractor'
   
   // Detecção Automática de Tela Mobile (< 768px)
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -131,8 +134,20 @@ export default function App() {
     setSelectedTicket(null);
   };
 
-  // 🔴 REGRA MOBILE EXCLUSIVA:
-  // Se for celular (< 768px), mostra SOMENTE o app do técnico
+  // Despacho Expresso direto pelo Card (Sugerir e Alocar Instantaneamente)
+  const handleQuickDispatch = async (e, ticket) => {
+    e.stopPropagation();
+    const bestTech = findBestTechForTicket(ticket, technicians);
+    if (bestTech) {
+      await dispatchTicketToTech(ticket.id, bestTech.id);
+      alert(`⚡ ALOCAÇÃO RÁPIDA CONCLUÍDA!\n\nChamado: ${ticket.code}\nDupla: ${bestTech.name}\nDistância: ${bestTech.distanceKm} km\nPrevisão: ${bestTech.etaMinutes} min`);
+    } else {
+      setSelectedTicket(ticket);
+      setDispatchTab('contractor'); // Se não tiver equipe interna, sugere terceirizada
+    }
+  };
+
+  // Visão Celular do Técnico (< 768px)
   if (isMobile) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-2">
@@ -149,6 +164,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      {/* Cabeçalho do Dashboard */}
       <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <div className="bg-sky-500/20 p-2.5 rounded-lg border border-sky-500/30">
@@ -170,7 +186,7 @@ export default function App() {
             <BarChart3 className="w-4 h-4" /> Custos & SLA
           </button>
           <button onClick={() => setIsTechMobileOpen(true)} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2.5 rounded-lg shadow-lg shadow-emerald-600/20 transition">
-            <Smartphone className="w-4 h-4" /> Modulo Celular
+            <Smartphone className="w-4 h-4" /> Módulo Celular
           </button>
           <button onClick={() => setIsCreateModalOpen(true)} className="flex items-center gap-2 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold px-3.5 py-2.5 rounded-lg shadow-lg shadow-sky-600/20 transition">
             <PlusCircle className="w-4 h-4" /> Novo Chamado
@@ -181,7 +197,9 @@ export default function App() {
         </div>
       </header>
 
+      {/* Conteúdo Principal */}
       <main className="p-6 max-w-7xl mx-auto w-full space-y-6">
+        {/* KPI Indicators */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center justify-between">
             <div>
@@ -213,6 +231,7 @@ export default function App() {
           </div>
         </div>
 
+        {/* Mapa em Tempo Real */}
         <div className="space-y-2">
           <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
             📍 Localização da Frota em Tempo Real (Visão Geral)
@@ -220,12 +239,14 @@ export default function App() {
           <Map 
             technicians={technicians} 
             tickets={tickets} 
-            onSelectTicket={(ticket) => setSelectedTicket(ticket)} 
+            onSelectTicket={(ticket) => { setSelectedTicket(ticket); setDispatchTab('internal'); }} 
             activeTicketForRoute={selectedTicket}
           />
         </div>
 
+        {/* Grid do Painel (Chamados + Lista de Técnicos) */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Painel Esquerdo: Chamados Pendentes com Despacho Rápido */}
           <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
             <h2 className="text-sm font-bold text-white tracking-wide uppercase flex items-center gap-2 border-b border-slate-800 pb-3">
               <AlertTriangle className="w-4 h-4 text-amber-400" /> Chamados Pendentes
@@ -233,7 +254,11 @@ export default function App() {
 
             <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
               {tickets.map((t) => (
-                <div key={t.id} onClick={() => t.status === 'pending' && setSelectedTicket(t)} className={`bg-slate-950 border rounded-lg p-4 space-y-3 cursor-pointer transition ${t.status === 'pending' ? 'border-sky-500/40 hover:border-sky-400' : 'border-slate-800 opacity-60'}`}>
+                <div 
+                  key={t.id} 
+                  onClick={() => { if (t.status === 'pending') { setSelectedTicket(t); setDispatchTab('internal'); } }} 
+                  className={`bg-slate-950 border rounded-lg p-4 space-y-3 cursor-pointer transition ${t.status === 'pending' ? 'border-sky-500/40 hover:border-sky-400' : 'border-slate-800 opacity-60'}`}
+                >
                   <div className="flex items-start justify-between">
                     <div>
                       <span className="text-xs font-mono text-sky-400 font-bold">{t.code}</span>
@@ -250,15 +275,21 @@ export default function App() {
                   </div>
 
                   {t.status === 'pending' && (
-                    <button className="w-full mt-2 bg-sky-950 hover:bg-sky-900 border border-sky-800 text-sky-300 text-xs py-1.5 rounded font-medium transition">
-                      Sugerir Técnico Ideal
-                    </button>
+                    <div className="flex gap-2 pt-1">
+                      <button 
+                        onClick={(e) => handleQuickDispatch(e, t)}
+                        className="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs py-1.5 rounded flex items-center justify-center gap-1.5 shadow-lg shadow-amber-500/10 transition"
+                      >
+                        <Zap className="w-3.5 h-3.5 fill-current" /> Despacho Inteligente
+                      </button>
+                    </div>
                   )}
                 </div>
               ))}
             </div>
           </div>
 
+          {/* Painel Direito: Situação dos Técnicos */}
           <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
             <h2 className="text-sm font-bold text-white tracking-wide uppercase flex items-center gap-2 border-b border-slate-800 pb-3">
               <Users className="w-4 h-4 text-sky-400" /> Situação dos Técnicos em Campo
@@ -276,8 +307,8 @@ export default function App() {
                   </div>
 
                   <div className="flex flex-wrap gap-1">
-                    {tech.skills?.map(s => <span key={s} className="px-1.5 py-0.5 text-[9px] bg-slate-800 text-slate-300 rounded">{s}</span>)}
-                    {tech.nrs?.map(nr => <span key={nr} className="px-1.5 py-0.5 text-[9px] bg-emerald-950 text-emerald-400 rounded font-semibold">{nr}</span>)}
+                    {tech.skills?.map(s => <span key={s} className="px-1.5 py-0.5 text-[9px] bg-slate-800 text-slate-300 rounded uppercase font-mono">{s}</span>)}
+                    {tech.nrs?.map(nr => <span key={nr} className="px-1.5 py-0.5 text-[9px] bg-emerald-950 text-emerald-400 rounded font-semibold font-mono">{nr}</span>)}
                   </div>
                 </div>
               ))}
@@ -286,10 +317,10 @@ export default function App() {
         </div>
       </main>
 
-      {/* Painel do Administrador (Cadastrar Técnicos) */}
+      {/* Painel do Administrador */}
       <AdminPanel isOpen={isAdminPanelOpen} onClose={() => setIsAdminPanelOpen(false)} />
 
-      {/* Cadastro de Chamados */}
+      {/* Modal de Cadastro de Novo Chamado */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex justify-center items-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
@@ -346,7 +377,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal de Despacho com IA */}
+      {/* MODAL DE DESPACHO UNIFICADO (INTERNA + TERCEIRIZADA COM ANÁLISE FINANCEIRA) */}
       {selectedTicket && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex justify-center items-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-2xl w-full space-y-4 shadow-2xl max-h-[90vh] flex flex-col">
@@ -354,75 +385,135 @@ export default function App() {
               <div>
                 <span className="text-xs font-mono text-sky-400">{selectedTicket.code}</span>
                 <h3 className="text-lg font-bold text-white">{selectedTicket.title}</h3>
-                <p className="text-xs text-slate-400">📍 Local do Chamado: <strong className="text-slate-200">{selectedTicket.location?.address}</strong></p>
+                <p className="text-xs text-slate-400">📍 Local: <strong className="text-slate-200">{selectedTicket.location?.address}</strong></p>
               </div>
               <button onClick={() => setSelectedTicket(null)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
             </div>
 
+            {/* Chaveador de Modalidades */}
+            <div className="grid grid-cols-2 gap-2 bg-slate-950 p-1 rounded-lg border border-slate-800">
+              <button
+                onClick={() => setDispatchTab('internal')}
+                className={`py-2 text-xs font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${
+                  dispatchTab === 'internal' ? 'bg-amber-500 text-slate-950 font-bold shadow' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Zap className="w-4 h-4 fill-current" /> Despacho Inteligente (Interno)
+              </button>
+              <button
+                onClick={() => setDispatchTab('contractor')}
+                className={`py-2 text-xs font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${
+                  dispatchTab === 'contractor' ? 'bg-sky-600 text-white font-bold shadow' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Building2 className="w-4 h-4" /> Empresas Terceirizadas (Custos)
+              </button>
+            </div>
+
             <div className="overflow-y-auto space-y-3 pr-1 flex-1">
-              <h4 className="text-xs font-bold uppercase text-slate-400 tracking-wider">Técnicos Mais Indicados para este Atendimento</h4>
+              {/* ABA 1: EQUIPES INTERNAS */}
+              {dispatchTab === 'internal' && (
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold uppercase text-slate-400 tracking-wider">Técnicos Mais Indicados por Algoritmo de Geopexel</h4>
 
-              {rankedCandidates.map((cand, idx) => (
-                <div key={cand.id} className={`p-4 rounded-lg border space-y-2 ${idx === 0 && cand.isQualified ? 'bg-sky-950/40 border-sky-500/60' : 'bg-slate-950 border-slate-800'}`}>
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-white">{cand.name}</span>
-                      <span className="text-xs text-slate-400">(Equipe {cand.team})</span>
-                      {idx === 0 && cand.isQualified && <span className="bg-sky-500 text-slate-950 text-[10px] font-bold px-2 py-0.5 rounded">RECOMENDADO</span>}
-                    </div>
-                    <div className="text-right">
-                      <span className="text-lg font-bold text-sky-400">{cand.score}</span>
-                      <span className="text-[10px] text-slate-400 block">NÍVEL DE COMPATIBILIDADE</span>
-                    </div>
-                  </div>
+                  {rankedCandidates.map((cand, idx) => (
+                    <div key={cand.id} className={`p-4 rounded-lg border space-y-2 ${idx === 0 && cand.isQualified ? 'bg-sky-950/40 border-sky-500/60' : 'bg-slate-950 border-slate-800'}`}>
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-white">{cand.name}</span>
+                          <span className="text-xs text-slate-400">(Equipe {cand.team})</span>
+                          {idx === 0 && cand.isQualified && <span className="bg-amber-500 text-slate-950 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-0.5">⚡ RECOMENDADO</span>}
+                        </div>
+                        <div className="text-right">
+                          <span className="text-lg font-bold text-sky-400">{cand.score}</span>
+                          <span className="text-[10px] text-slate-400 block">COMPATIBILIDADE</span>
+                        </div>
+                      </div>
 
-                  <div className="grid grid-cols-3 gap-2 text-xs bg-slate-900/60 p-2.5 rounded border border-slate-800/50">
-                    <div className="flex items-center gap-1.5 text-slate-300">
-                      <Navigation className="w-3.5 h-3.5 text-sky-400" />
-                      <span>Distância: <strong>{cand.distanceKm} km</strong></span>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-slate-300">
-                      <Clock className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Chegada Estimada: <strong className="text-amber-300">{formatarTempo(cand.etaMinutes)}</strong></span>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-slate-300">
-                      <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Custo Combustível: <strong>R$ {cand.estimatedFuelCost}</strong></span>
-                    </div>
-                  </div>
+                      <div className="grid grid-cols-3 gap-2 text-xs bg-slate-900/60 p-2.5 rounded border border-slate-800/50">
+                        <div className="flex items-center gap-1.5 text-slate-300">
+                          <Navigation className="w-3.5 h-3.5 text-sky-400" />
+                          <span>Distância: <strong>{cand.distanceKm} km</strong></span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-slate-300">
+                          <Clock className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Chegada: <strong className="text-amber-300">{formatarTempo(cand.etaMinutes)}</strong></span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-slate-300">
+                          <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Combustível: <strong>R$ {cand.estimatedFuelCost}</strong></span>
+                        </div>
+                      </div>
 
-                  <div className="flex justify-between items-center pt-2">
-                    <div className="flex gap-1">
-                      {cand.hasAllNRs ? <span className="text-[10px] text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">Normas (NRs) OK</span> : <span className="text-[10px] text-red-400 bg-red-950 px-2 py-0.5 rounded border border-red-800">Falta NR</span>}
-                      {cand.hasAllSkills ? <span className="text-[10px] text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">Habilidades OK</span> : <span className="text-[10px] text-red-400 bg-red-950 px-2 py-0.5 rounded border border-red-800">Falta Habilidade</span>}
-                    </div>
+                      <div className="flex justify-between items-center pt-2">
+                        <div className="flex gap-1">
+                          {cand.hasAllNRs ? <span className="text-[10px] text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">NRs OK</span> : <span className="text-[10px] text-red-400 bg-red-950 px-2 py-0.5 rounded border border-red-800">Falta NR</span>}
+                          {cand.hasAllSkills ? <span className="text-[10px] text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">Habilidades OK</span> : <span className="text-[10px] text-red-400 bg-red-950 px-2 py-0.5 rounded border border-red-800">Falta Habilidade</span>}
+                        </div>
 
-                    <button disabled={!cand.isQualified} onClick={() => handleDispatchTech(selectedTicket.id, cand.id)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-xs font-semibold rounded transition">
-                      {cand.isQualified ? 'Confirmar Despacho' : 'Incompatível'}
-                    </button>
-                  </div>
+                        <button disabled={!cand.isQualified} onClick={() => handleDispatchTech(selectedTicket.id, cand.id)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-xs font-semibold rounded transition flex items-center gap-1">
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          {cand.isQualified ? 'Confirmar Despacho' : 'Incompatível'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
 
-              <div className="mt-4 pt-4 border-t border-slate-800 space-y-2">
-                <h4 className="text-xs font-bold text-amber-400 flex items-center gap-1"><Building2 className="w-4 h-4" /> Empresas Terceirizadas (Contingência)</h4>
-                {contractors.map(c => (
-                  <div key={c.id} className="bg-slate-950 border border-slate-800 p-3 rounded flex justify-between items-center">
-                    <div>
-                      <h5 className="text-xs font-bold text-slate-200">{c.name}</h5>
-                      <p className="text-[11px] text-slate-400">Tempo Médio de Atendimento: {formatarTempo(c.avgEtaMinutes)} | Avaliação: {c.rating}⭐</p>
-                    </div>
-                    <button onClick={() => handleDispatchContractor(selectedTicket.id, c.id)} className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded">
-                      Acionar Terceirizada
-                    </button>
-                  </div>
-                ))}
-              </div>
+              {/* ABA 2: TERCEIRIZADAS COM CÁLCULO DE CUSTO REAL */}
+              {dispatchTab === 'contractor' && (
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold text-amber-400 flex items-center gap-1"><Building2 className="w-4 h-4" /> Credenciadas & Simulação Financeira de Transbordo</h4>
+
+                  {contractors.map(c => {
+                    const cost = calculateContractorCost(c, selectedTicket, 12.5);
+                    return (
+                      <div key={c.id} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h5 className="text-sm font-bold text-white">{c.name}</h5>
+                            <p className="text-xs text-slate-400">Tempo Médio: <strong>~{c.avgEtaMinutes || 45} min</strong> | Rating: <strong>⭐ {c.rating || 4.8}</strong></p>
+                          </div>
+                          <button onClick={() => handleDispatchContractor(selectedTicket.id, c.id)} className="px-3 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded transition flex items-center gap-1">
+                            <Building2 className="w-3.5 h-3.5" /> Despachar Terceirizada
+                          </button>
+                        </div>
+
+                        {/* Breakdown Financeiro */}
+                        {cost && (
+                          <div className="bg-slate-900 border border-slate-800/80 p-3 rounded-lg space-y-1.5 text-xs font-mono">
+                            <div className="flex justify-between text-slate-400">
+                              <span>Taxa Base de Deslocamento:</span>
+                              <span className="text-slate-200">R$ {cost.baseRate.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-slate-400">
+                              <span>Distância Estimada (12.5 km):</span>
+                              <span className="text-slate-200">R$ {cost.distanceCost.toFixed(2)}</span>
+                            </div>
+                            {cost.severitySurcharge > 0 && (
+                              <div className="flex justify-between text-amber-400 font-semibold">
+                                <span>Adicional Urgência ({selectedTicket.severity?.toUpperCase()}):</span>
+                                <span>+ R$ {cost.severitySurcharge.toFixed(2)}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between text-sm font-bold text-emerald-400 pt-2 border-t border-slate-800">
+                              <span>Custo Total Previsto:</span>
+                              <span className="text-base">R$ {cost.totalCost.toFixed(2)}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
+      {/* Outras Modais */}
       {isTechMobileOpen && <TechMobileView technicians={technicians} tickets={tickets} onClose={() => setIsTechMobileOpen(false)} />}
       {isAnalyticsOpen && <AnalyticsModal tickets={tickets} technicians={technicians} contractors={contractors} onClose={() => setIsAnalyticsOpen(false)} />}
     </div>
