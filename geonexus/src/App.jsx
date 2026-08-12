@@ -4,8 +4,8 @@ import {
   Wrench, PlusCircle, Navigation, DollarSign, X, Building2, Smartphone, BarChart3, Clock, Loader2, Search
 } from 'lucide-react';
 import { seedDatabase, subscribeToCollection, createTicketInDB, dispatchTicketToTech, dispatchTicketToContractor } from './services/dbService';
-import { rankTechniciansForTicket } from './utils/dispatchEngine';
-import { getCoordinatesFromAddress, getAddressFromCep } from './utils/geoUtils';
+import { rankTechniciansForTicket, getCoordinatesFromAddress } from './services/geoService';
+import { getAddressFromCep } from './utils/geoUtils';
 import Map from './components/Map';
 import TechMobileView from './components/TechMobileView';
 import AnalyticsModal from './components/AnalyticsModal';
@@ -48,7 +48,7 @@ export default function App() {
   const [newRepairTime, setNewRepairTime] = useState(120);
   
   const [cep, setCep] = useState('');
-  const [newAddress, setNewAddress] = useState('São Mateus - ES');
+  const [newAddress, setNewAddress] = useState('Vitória - ES');
   const [currentCoords, setCurrentCoords] = useState(null);
 
   useEffect(() => {
@@ -67,13 +67,14 @@ export default function App() {
     if (!cep || cep.replace(/\D/g, '').length !== 8) return;
     
     setIsSearchingCep(true);
-    const result = await getAddressFromCep(cep);
-    setIsSearchingCep(false);
-
-    if (result) {
-      setNewAddress(result.address);
-      setCurrentCoords({ lat: result.lat, lng: result.lng, address: result.address });
+    if (typeof getAddressFromCep === 'function') {
+      const result = await getAddressFromCep(cep);
+      if (result) {
+        setNewAddress(result.address);
+        setCurrentCoords({ lat: result.lat, lng: result.lng, address: result.address });
+      }
     }
+    setIsSearchingCep(false);
   };
 
   const handleCreateTicket = async (e) => {
@@ -123,6 +124,7 @@ export default function App() {
     setSelectedTicket(null);
   };
 
+  // Rankeamento real via geoService.js
   const rankedCandidates = selectedTicket ? rankTechniciansForTicket(selectedTicket, technicians) : [];
 
   return (
@@ -188,11 +190,17 @@ export default function App() {
           </div>
         </div>
 
+        {/* Mapa Integrado ao geoService e à simulação de rota real */}
         <div className="space-y-2">
           <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-            📍 Localização em Tempo Real (Google Maps View)
+            📍 Localização da Frota em Tempo Real (Visão Geral)
           </h2>
-          <Map technicians={technicians} tickets={tickets} onSelectTicket={(ticket) => setSelectedTicket(ticket)} />
+          <Map 
+            technicians={technicians} 
+            tickets={tickets} 
+            onSelectTicket={(ticket) => setSelectedTicket(ticket)} 
+            activeTicketForRoute={selectedTicket}
+          />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -256,7 +264,7 @@ export default function App() {
         </div>
       </main>
 
-      {/* MODAL 1: Cadastro com CEP */}
+      {/* MODAL 1: Cadastro de Chamado */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex justify-center items-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
@@ -268,7 +276,7 @@ export default function App() {
             <form onSubmit={handleCreateTicket} className="space-y-4">
               <div>
                 <label className="text-xs font-medium text-slate-300">Título da Ocorrência</label>
-                <input required type="text" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Ex: ROMPIMENTO DE CABO" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-white mt-1 focus:border-sky-500 outline-none" />
+                <input required type="text" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Ex: ROMPIMENTO DE CABO FIBRA" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-white mt-1 focus:border-sky-500 outline-none" />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -290,7 +298,7 @@ export default function App() {
               <div className="space-y-1">
                 <label className="text-xs font-medium text-slate-300">CEP do Local (ViaCEP)</label>
                 <div className="flex gap-2">
-                  <input type="text" value={cep} onChange={(e) => setCep(e.target.value)} placeholder="29900-000" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-white focus:border-sky-500 outline-none" />
+                  <input type="text" value={cep} onChange={(e) => setCep(e.target.value)} placeholder="29000-000" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-white focus:border-sky-500 outline-none" />
                   <button type="button" onClick={handleCepSearch} disabled={isSearchingCep} className="px-3 py-2 bg-sky-950 border border-sky-800 hover:bg-sky-900 text-sky-300 rounded text-xs font-semibold flex items-center gap-1 transition">
                     {isSearchingCep ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} Buscar
                   </button>
@@ -313,7 +321,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 2: Despacho com Tempo Formatado (Dias / Horas / Minutos) */}
+      {/* MODAL 2: Despacho com Tempo Formatado */}
       {selectedTicket && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex justify-center items-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-2xl w-full space-y-4 shadow-2xl max-h-[90vh] flex flex-col">
@@ -350,7 +358,6 @@ export default function App() {
                     </div>
                     <div className="flex items-center gap-1.5 text-slate-300">
                       <Clock className="w-3.5 h-3.5 text-amber-400" />
-                      {/* TEMPO FORMATADO (EX: 2h 47min) */}
                       <span>Chegada Estimada: <strong className="text-amber-300">{formatarTempo(cand.etaMinutes)}</strong></span>
                     </div>
                     <div className="flex items-center gap-1.5 text-slate-300">
