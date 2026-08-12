@@ -31,6 +31,30 @@ export const createTicketInDB = async (ticketData) => {
   }
 };
 
+export const addTechToDB = async (techData) => {
+  try {
+    const id = techData.id || `tech-${Date.now()}`;
+    const newTech = { ...techData, id };
+    await set(ref(db, `technicians/${id}`), newTech);
+    return { success: true };
+  } catch (error) {
+    console.error("Erro ao adicionar técnico:", error);
+    return { success: false, error };
+  }
+};
+
+export const addContractorToDB = async (contractorData) => {
+  try {
+    const id = contractorData.id || `contractor-${Date.now()}`;
+    const newContractor = { ...contractorData, id };
+    await set(ref(db, `contractors/${id}`), newContractor);
+    return { success: true };
+  } catch (error) {
+    console.error("Erro ao adicionar terceiro:", error);
+    return { success: false, error };
+  }
+};
+
 export const dispatchTicketToTech = async (ticketId, techId) => {
   try {
     await update(ref(db, `tickets/${ticketId}`), {
@@ -96,7 +120,6 @@ export const updateTechTicketStatus = async (ticketId, techId, ticketStatus, tec
   }
 };
 
-// Função adicionada para atualização do status direto pelo app mobile
 export const updateTechStatusInDB = async (techId, techStatus) => {
   try {
     await update(ref(db, `technicians/${techId}`), {
@@ -106,6 +129,24 @@ export const updateTechStatusInDB = async (techId, techStatus) => {
     return { success: true };
   } catch (error) {
     console.error("Erro ao atualizar status do técnico:", error);
+    return { success: false, error };
+  }
+};
+
+export const updateTechLocationInDB = async (techId, location) => {
+  try {
+    const formattedLocation = Array.isArray(location)
+      ? { lat: location[0], lng: location[1] }
+      : location;
+
+    await update(ref(db, `technicians/${techId}`), {
+      location: formattedLocation,
+      updatedAt: Date.now()
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error("Erro ao atualizar localização do técnico:", error);
     return { success: false, error };
   }
 };

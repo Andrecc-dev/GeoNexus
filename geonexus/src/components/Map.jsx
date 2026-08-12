@@ -3,18 +3,19 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { fetchRealRouteWithTraffic } from '../services/geoService';
+import { updateTechLocationInDB } from '../services/dbService';
 
-// Marcadores Visuais de Técnicos (Duplas)
+// Marcadores Visuais das Duplas Técnicas
 const createTechIcon = (isSimulating = false, status = 'available') => {
   let bg = 'bg-emerald-500 shadow-emerald-500/50';
-  let symbol = '👥'; // Ícone padrão para Dupla Técnica Disponível
+  let symbol = '👥';
 
   if (isSimulating) {
     bg = 'bg-amber-500 shadow-amber-500/50';
-    symbol = '🚘'; // Em Deslocamento GPS
+    symbol = '🚘';
   } else if (status === 'busy' || status === 'traveling') {
     bg = 'bg-indigo-600 shadow-indigo-600/50';
-    symbol = '🛠️'; // Em Atendimento
+    symbol = '🛠️';
   } else if (status === 'offline') {
     bg = 'bg-slate-600 shadow-slate-600/50';
     symbol = '💤';
@@ -34,7 +35,7 @@ const createTechIcon = (isSimulating = false, status = 'available') => {
   });
 };
 
-// Marcadores Visuais dos Problemas (Chamados)
+// Marcadores Visuais das Ocorrências
 const createTicketIcon = (severity) => {
   const sev = severity?.toLowerCase();
   let bg = 'bg-amber-500 shadow-amber-500/50';
@@ -42,10 +43,10 @@ const createTicketIcon = (severity) => {
 
   if (sev === 'critical') {
     bg = 'bg-red-600 shadow-red-600/60 animate-bounce';
-    symbol = '🔥'; // Urgência Crítica
+    symbol = '🔥';
   } else if (sev === 'low') {
     bg = 'bg-sky-500 shadow-sky-500/50';
-    symbol = '🔧'; // Urgência Baixa
+    symbol = '🔧';
   }
 
   return L.divIcon({
@@ -71,7 +72,7 @@ function CameraFollower({ position, active }) {
   const map = useMap();
   useEffect(() => {
     if (active && position) {
-      map.panTo(position, { animate: true, duration: 0.4 });
+      map.panTo(position, { animate: true, duration: 0.2 });
     }
   }, [position, active, map]);
   return null;
@@ -85,7 +86,24 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
   const [isSimulating, setIsSimulating] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [simulatedLocation, setSimulatedLocation] = useState(null);
-  const [simSpeed, setSimSpeed] = useState(2);
+
+  const activeTech = technicians.find((t) => t.status === 'available') || technicians[0];
+
+  const anchorPoints = {
+    base: { lat: -20.3155, lng: -40.3128, address: 'Base Operacional' },
+    posto: { lat: -20.3080, lng: -40.3050, address: 'Posto de Apoio' },
+    cliente: { lat: -20.2980, lng: -40.2920, address: 'Local do Cliente' }
+  };
+
+  const handleAnchorJump = async (pointKey) => {
+    if (!activeTech) return;
+    const targetPoint = anchorPoints[pointKey];
+    setSimulatedLocation([targetPoint.lat, targetPoint.lng]);
+
+    if (typeof updateTechLocationInDB === 'function') {
+      await updateTechLocationInDB(activeTech.id, targetPoint);
+    }
+  };
 
   const handleStartPitchSimulation = async () => {
     if (isSimulating) {
@@ -98,21 +116,16 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
       code: 'CH-PITCH',
       title: 'Atendimento Crítico em Campo',
       severity: 'critical',
-      location: { lat: -20.3015, lng: -40.2928, address: 'Praia do Canto, Vitória' }
+      location: { lat: -20.2980, lng: -40.2920, address: 'Jardim da Penha, Vitória' }
     };
 
-    const targetTech = technicians.find((t) => t.status === 'available') || technicians[0] || {
-      id: 'tech-pitch',
-      name: 'Dupla Técnico Campo (GPS)',
-      team: 'Alfa',
-      location: { lat: -20.3255, lng: -40.3328 }
-    };
+    if (!activeTech || !targetTicket.location) return;
 
     setIsLoadingRoute(true);
 
     const routeResult = await fetchRealRouteWithTraffic(
-      targetTech.location.lat,
-      targetTech.location.lng,
+      activeTech.location.lat,
+      activeTech.location.lng,
       targetTicket.location.lat,
       targetTicket.location.lng
     );
@@ -128,10 +141,9 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
     setIsLoadingRoute(false);
   };
 
+  // Atualização GPS Ultra-Rápida a cada 300ms (Velocidade 5x para o Pitch)
   useEffect(() => {
     if (!isSimulating || !routeData?.coordinates) return;
-
-    const intervalMs = Math.max(80, 500 / simSpeed);
 
     const timer = setInterval(() => {
       setCurrentStep((prev) => {
@@ -140,16 +152,21 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
           setIsSimulating(false);
           return prev;
         }
-        setSimulatedLocation(routeData.coordinates[next]);
+        const coords = routeData.coordinates[next];
+        setSimulatedLocation(coords);
+
+        if (activeTech && typeof updateTechLocationInDB === 'function') {
+          updateTechLocationInDB(activeTech.id, { lat: coords[0], lng: coords[1] });
+        }
+
         return next;
       });
-    }, intervalMs);
+    }, 300); // 300ms = 5x mais rápido que o normal
 
     return () => clearInterval(timer);
-  }, [isSimulating, routeData, simSpeed]);
+  }, [isSimulating, routeData, activeTech]);
 
   const totalPoints = routeData?.coordinates?.length || 1;
-  const progressPercent = Math.min(100, Math.round((currentStep / (totalPoints - 1 || 1)) * 100));
   const remainingDistanceKm = routeData ? Number((routeData.distanceKm * (1 - currentStep / totalPoints)).toFixed(2)) : 0;
   const remainingPath = routeData?.coordinates ? routeData.coordinates.slice(currentStep) : [];
 
@@ -164,59 +181,58 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
           </span>
         </div>
 
-        <div className="flex items-center gap-3">
-          {isSimulating && (
-            <div className="flex items-center gap-2 text-xs bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
-              <span className="text-slate-400">Progresso: <strong className="text-emerald-400">{progressPercent}%</strong></span>
-              <span className="text-slate-400">Restante: <strong className="text-amber-400">{remainingDistanceKm} km</strong></span>
-
-              <div className="flex gap-1 ml-2">
-                {[1, 2, 5].map((speed) => (
-                  <button
-                    key={speed}
-                    onClick={() => setSimSpeed(speed)}
-                    className={`px-1.5 py-0.5 text-[10px] rounded font-mono font-bold ${
-                      simSpeed === speed ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    {speed}x
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
+        {/* Botoes de Ancoragem Rápida */}
+        <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800">
+          <span className="text-[10px] text-slate-400 uppercase font-bold px-1.5">Atalhos:</span>
           <button
-            onClick={handleStartPitchSimulation}
-            disabled={isLoadingRoute}
-            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 shadow-lg ${
-              isSimulating
-                ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-amber-500/20'
-                : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/30'
-            } ${isLoadingRoute ? 'opacity-50 cursor-not-allowed' : ''}`}
+            onClick={() => handleAnchorJump('base')}
+            className="px-2 py-1 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-200 rounded font-semibold transition"
           >
-            {isLoadingRoute ? (
-              <span>⏳ Trançando Rota...</span>
-            ) : isSimulating ? (
-              <span>⏸ Pausar Telemetria GPS</span>
-            ) : (
-              <span>▶ Simular Telemetria GPS (Pitch)</span>
-            )}
+            🏢 Base
+          </button>
+          <button
+            onClick={() => handleAnchorJump('posto')}
+            className="px-2 py-1 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-200 rounded font-semibold transition"
+          >
+            ⛽ Posto
+          </button>
+          <button
+            onClick={() => handleAnchorJump('cliente')}
+            className="px-2 py-1 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-200 rounded font-semibold transition"
+          >
+            🎯 Cliente
           </button>
         </div>
+
+        <button
+          onClick={handleStartPitchSimulation}
+          disabled={isLoadingRoute}
+          className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 shadow-lg ${
+            isSimulating
+              ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-amber-500/20'
+              : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/30'
+          } ${isLoadingRoute ? 'opacity-50 cursor-not-allowed' : ''}`}
+        >
+          {isLoadingRoute ? (
+            <span>⏳ Traçando Rota...</span>
+          ) : isSimulating ? (
+            <span>⏸ Pausar Telemetria</span>
+          ) : (
+            <span>⚡ Rastreamento Modo Pitch (5x)</span>
+          )}
+        </button>
       </div>
 
-      {/* Renderização do Mapa e Legenda Integrada */}
+      {/* Renderização do Mapa */}
       <div className="h-[480px] w-full rounded-b-xl overflow-hidden border-x border-b border-slate-800 relative z-10">
         
-        {/* LEGENDA FLUTUANTE DO MAPA */}
+        {/* LEGENDA FLUTUANTE */}
         <div className="absolute bottom-4 left-4 z-[1000] bg-slate-900/90 backdrop-blur-md border border-slate-700/80 p-3 rounded-xl shadow-2xl text-xs space-y-2.5 max-w-[220px] pointer-events-auto">
           <div className="font-bold text-slate-200 uppercase tracking-wider text-[10px] border-b border-slate-800 pb-1 flex justify-between items-center">
             <span>📍 Legenda do Mapa</span>
             <span className="text-[9px] text-emerald-400 font-mono">AO VIVO</span>
           </div>
 
-          {/* Equipes / Técnicos */}
           <div className="space-y-1.5">
             <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Equipes (Duplas)</span>
             <div className="flex items-center gap-2 text-slate-300">
@@ -233,7 +249,6 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
             </div>
           </div>
 
-          {/* Problemas / Chamados */}
           <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
             <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Gravidade do Problema</span>
             <div className="flex items-center gap-2 text-slate-300">
@@ -271,7 +286,6 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
             />
           )}
 
-          {/* Marcador em Deslocamento */}
           {simulatedLocation && (
             <Marker position={simulatedLocation} icon={createTechIcon(true)}>
               <Popup>
@@ -284,7 +298,6 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
             </Marker>
           )}
 
-          {/* Marcadores das Duplas Técnicas */}
           {!simulatedLocation &&
             technicians?.map((tech) => tech.location && (
               <Marker key={`tech-${tech.id}`} position={[tech.location.lat, tech.location.lng]} icon={createTechIcon(false, tech.status)}>
@@ -300,7 +313,6 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
               </Marker>
             ))}
 
-          {/* Marcadores das Ocorrências / Problemas */}
           {tickets?.map((ticket) => ticket.location && (
             <Marker
               key={`ticket-${ticket.id}`}

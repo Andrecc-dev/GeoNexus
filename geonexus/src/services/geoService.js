@@ -121,6 +121,15 @@ export const rankTechniciansForTicket = (ticket, technicians) => {
 };
 
 /**
+ * Retorna o melhor técnico disponível e qualificado para o chamado com base no Rankeamento
+ */
+export const findBestTechForTicket = (ticket, technicians = []) => {
+  const ranked = rankTechniciansForTicket(ticket, technicians);
+  // Prioriza técnicos com status 'available', caso contrário pega o maior score
+  return ranked.find((tech) => tech.status === 'available') || ranked[0] || null;
+};
+
+/**
  * Geocodificação de Endereço via Nominatim OpenStreetMap
  */
 export const getCoordinatesFromAddress = async (address) => {

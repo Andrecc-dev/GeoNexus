@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Activity, Users, AlertTriangle, Database, ShieldAlert, Truck, 
-  Wrench, PlusCircle, Navigation, DollarSign, X, Building2, Smartphone, BarChart3, Clock, Loader2, Search
+  Wrench, PlusCircle, Navigation, DollarSign, X, Building2, Smartphone, BarChart3, Clock, Loader2, Search, UserPlus
 } from 'lucide-react';
 import { seedDatabase, subscribeToCollection, createTicketInDB, dispatchTicketToTech, dispatchTicketToContractor } from './services/dbService';
 import { rankTechniciansForTicket, getCoordinatesFromAddress } from './services/geoService';
@@ -9,8 +9,8 @@ import { getAddressFromCep } from './utils/geoUtils';
 import Map from './components/Map';
 import TechMobileView from './components/TechMobileView';
 import AnalyticsModal from './components/AnalyticsModal';
+import AdminPanel from './components/AdminPanel';
 
-// Formatação Inteligente de Tempo (Minutos -> Dias, Horas, Minutos)
 const formatarTempo = (minutosTotais) => {
   if (!minutosTotais || minutosTotais <= 0) return '0 min';
   const dias = Math.floor(minutosTotais / 1440);
@@ -36,7 +36,11 @@ export default function App() {
   const [contractors, setContractors] = useState([]);
   const [selectedTicket, setSelectedTicket] = useState(null);
   
+  // Detecção Automática de Tela Mobile (< 768px)
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [isTechMobileOpen, setIsTechMobileOpen] = useState(false);
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -52,11 +56,15 @@ export default function App() {
   const [currentCoords, setCurrentCoords] = useState(null);
 
   useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+
     const unsubTechs = subscribeToCollection('technicians', setTechnicians);
     const unsubTickets = subscribeToCollection('tickets', setTickets);
     const unsubContractors = subscribeToCollection('contractors', setContractors);
 
     return () => {
+      window.removeEventListener('resize', handleResize);
       unsubTechs();
       unsubTickets();
       unsubContractors();
@@ -65,7 +73,6 @@ export default function App() {
 
   const handleCepSearch = async () => {
     if (!cep || cep.replace(/\D/g, '').length !== 8) return;
-    
     setIsSearchingCep(true);
     if (typeof getAddressFromCep === 'function') {
       const result = await getAddressFromCep(cep);
@@ -124,7 +131,20 @@ export default function App() {
     setSelectedTicket(null);
   };
 
-  // Rankeamento real via geoService.js
+  // 🔴 REGRA MOBILE EXCLUSIVA:
+  // Se for celular (< 768px), mostra SOMENTE o app do técnico
+  if (isMobile) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-2">
+        <TechMobileView 
+          technicians={technicians} 
+          tickets={tickets} 
+          onClose={null} 
+        />
+      </div>
+    );
+  }
+
   const rankedCandidates = selectedTicket ? rankTechniciansForTicket(selectedTicket, technicians) : [];
 
   return (
@@ -136,24 +156,27 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-white flex items-center gap-2">
-              GeoNexus <span className="text-xs font-normal text-sky-400 bg-sky-950 border border-sky-800 px-2 py-0.5 rounded-full">Gestão de Operações</span>
+              GeoNexus <span className="text-xs font-normal text-sky-400 bg-sky-950 border border-sky-800 px-2 py-0.5 rounded-full">Painel do Administrador</span>
             </h1>
             <p className="text-xs text-slate-400">Alocação Inteligente de Equipes & Roteamento em Tempo Real</p>
           </div>
         </div>
 
         <div className="flex gap-2">
+          <button onClick={() => setIsAdminPanelOpen(true)} className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-sky-400 border border-sky-500/30 text-xs font-semibold px-3 py-2.5 rounded-lg transition">
+            <UserPlus className="w-4 h-4" /> Gestão de Técnicos
+          </button>
           <button onClick={() => setIsAnalyticsOpen(true)} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3.5 py-2.5 rounded-lg shadow-lg shadow-indigo-600/20 transition">
-            <BarChart3 className="w-4 h-4" /> Relatório de Custos & SLA
+            <BarChart3 className="w-4 h-4" /> Custos & SLA
           </button>
           <button onClick={() => setIsTechMobileOpen(true)} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2.5 rounded-lg shadow-lg shadow-emerald-600/20 transition">
-            <Smartphone className="w-4 h-4" /> App do Técnico
+            <Smartphone className="w-4 h-4" /> Modulo Celular
           </button>
           <button onClick={() => setIsCreateModalOpen(true)} className="flex items-center gap-2 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold px-3.5 py-2.5 rounded-lg shadow-lg shadow-sky-600/20 transition">
             <PlusCircle className="w-4 h-4" /> Novo Chamado
           </button>
           <button onClick={seedDatabase} className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium px-3 py-2.5 rounded-lg border border-slate-700 transition">
-            <Database className="w-4 h-4 text-sky-400" /> Reiniciar Dados
+            <Database className="w-4 h-4 text-sky-400" /> Reiniciar
           </button>
         </div>
       </header>
@@ -190,7 +213,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Mapa Integrado ao geoService e à simulação de rota real */}
         <div className="space-y-2">
           <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
             📍 Localização da Frota em Tempo Real (Visão Geral)
@@ -264,7 +286,10 @@ export default function App() {
         </div>
       </main>
 
-      {/* MODAL 1: Cadastro de Chamado */}
+      {/* Painel do Administrador (Cadastrar Técnicos) */}
+      <AdminPanel isOpen={isAdminPanelOpen} onClose={() => setIsAdminPanelOpen(false)} />
+
+      {/* Cadastro de Chamados */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex justify-center items-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
@@ -321,7 +346,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 2: Despacho com Tempo Formatado */}
+      {/* Modal de Despacho com IA */}
       {selectedTicket && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex justify-center items-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-2xl w-full space-y-4 shadow-2xl max-h-[90vh] flex flex-col">
