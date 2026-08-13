@@ -2,17 +2,26 @@ import React, { useState, useEffect } from 'react';
 import { 
   Activity, Users, AlertTriangle, Database, ShieldAlert, Truck, 
   Wrench, PlusCircle, Navigation, DollarSign, X, Building2, Smartphone, 
-  BarChart3, Clock, Loader2, Search, UserPlus, Zap, ShieldCheck, CheckCircle2
+  BarChart3, Clock, Loader2, Search, UserPlus, Zap, ShieldCheck
 } from 'lucide-react';
+
+// Importação de Serviços
 import { seedDatabase, subscribeToCollection, createTicketInDB, dispatchTicketToTech, dispatchTicketToContractor } from './services/dbService';
 import { rankTechniciansForTicket, getCoordinatesFromAddress, findBestTechForTicket } from './services/geoService';
 import { calculateContractorCost } from './services/contratoService';
 import { getAddressFromCep } from './utils/geoUtils';
+
+// Importação de Componentes
 import Map from './components/Map';
 import TechMobileView from './components/TechMobileView';
 import AnalyticsModal from './components/AnalyticsModal';
 import AdminPanel from './components/AdminPanel';
 
+// ============================================================================
+// FUNÇÕES AUXILIARES DE FORMATAÇÃO E TRADUÇÃO
+// ============================================================================
+
+/** Formata o tempo estimado em minutos para formato humano (d, h, min) */
 const formatarTempo = (minutosTotais) => {
   if (!minutosTotais || minutosTotais <= 0) return '0 min';
   const dias = Math.floor(minutosTotais / 1440);
@@ -27,33 +36,83 @@ const formatarTempo = (minutosTotais) => {
   return partes.join(' ');
 };
 
+/** Traduz os níveis de severidade/gravidade dos chamados */
 const traduzirGravidade = (severity) => {
   const mapa = { critical: 'Crítica', high: 'Alta', medium: 'Média', low: 'Baixa' };
   return mapa[severity?.toLowerCase()] || severity;
 };
 
+/** Renderiza a Badge de Status dos Chamados traduzida e estilizada */
+const renderTicketStatusBadge = (status) => {
+  const statusKey = status?.toUpperCase() || 'PENDING';
+  
+  const statusMap = {
+    PENDING: { label: 'PENDENTE', classes: 'bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-amber-500/10' },
+    OPEN: { label: 'PENDENTE', classes: 'bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-amber-500/10' },
+    ASSIGNED: { label: 'ATRIBUÍDO', classes: 'bg-sky-500/20 text-sky-300 border-sky-500/40 shadow-sky-500/10' },
+    TRAVELING: { label: 'EM DESLOCAMENTO', classes: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40 shadow-indigo-500/10' },
+    IN_PROGRESS: { label: 'EM ATENDIMENTO', classes: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-emerald-500/10' },
+    COMPLETED: { label: 'CONCLUÍDO', classes: 'bg-slate-700/40 text-slate-300 border-slate-600/50' },
+  };
+
+  const config = statusMap[statusKey] || {
+    label: statusKey,
+    classes: 'bg-slate-800 text-slate-300 border-slate-700',
+  };
+
+  return (
+    <span className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold tracking-wider border shadow-sm ${config.classes}`}>
+      {config.label}
+    </span>
+  );
+};
+
+/** Renderiza a Badge de Status da Frota de Técnicos */
+const renderTechStatusBadge = (status) => {
+  const statusKey = status?.toLowerCase() || 'available';
+
+  const statusMap = {
+    available: { label: 'Disponível', classes: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
+    traveling: { label: 'Em Deslocamento', classes: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
+    busy: { label: 'Em Atendimento', classes: 'bg-sky-500/10 text-sky-400 border-sky-500/20' },
+    offline: { label: 'Offline', classes: 'bg-slate-800 text-slate-500 border-slate-700' },
+  };
+
+  const config = statusMap[statusKey] || { label: status, classes: 'bg-slate-800 text-slate-300 border-slate-700' };
+
+  return (
+    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${config.classes}`}>
+      {config.label}
+    </span>
+  );
+};
+
+// ============================================================================
+// COMPONENTE PRINCIPAL
+// ============================================================================
+
 export default function App() {
   const [technicians, setTechnicians] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [contractors, setContractors] = useState([]);
-  const [selectedTicket, setSelectedTicket] = useState(null);
-  const [dispatchTab, setDispatchTab] = useState('internal'); // 'internal' ou 'contractor'
-  
-  // Detecção Automática de Tela Mobile (< 768px)
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
+  const [selectedTicket, setSelectedTicket] = useState(null);
+  const [dispatchTab, setDispatchTab] = useState('internal');
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [isTechMobileOpen, setIsTechMobileOpen] = useState(false);
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
+  
+  // Estado para controlar a caixinha bonitinha do Despacho Rápido
+  const [quickDispatchModalData, setQuickDispatchModalData] = useState(null);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSearchingCep, setIsSearchingCep] = useState(false);
-  
   const [newTitle, setNewTitle] = useState('');
   const [newType] = useState('backbone');
   const [newSeverity, setNewSeverity] = useState('medium');
   const [newRepairTime, setNewRepairTime] = useState(120);
-  
   const [cep, setCep] = useState('');
   const [newAddress, setNewAddress] = useState('Vitória - ES');
   const [currentCoords, setCurrentCoords] = useState(null);
@@ -134,20 +193,26 @@ export default function App() {
     setSelectedTicket(null);
   };
 
-  // Despacho Expresso direto pelo Card (Sugerir e Alocar Instantaneamente)
+  // Despacho Inteligente com Modal Estilizado
   const handleQuickDispatch = async (e, ticket) => {
     e.stopPropagation();
     const bestTech = findBestTechForTicket(ticket, technicians);
     if (bestTech) {
       await dispatchTicketToTech(ticket.id, bestTech.id);
-      alert(`⚡ ALOCAÇÃO RÁPIDA CONCLUÍDA!\n\nChamado: ${ticket.code}\nDupla: ${bestTech.name}\nDistância: ${bestTech.distanceKm} km\nPrevisão: ${bestTech.etaMinutes} min`);
+      
+      // Exibe a caixinha bonitinha customizada em vez do alert()
+      setQuickDispatchModalData({
+        code: ticket.code,
+        techName: bestTech.name,
+        distanceKm: bestTech.distanceKm,
+        etaMinutes: bestTech.etaMinutes
+      });
     } else {
       setSelectedTicket(ticket);
-      setDispatchTab('contractor'); // Se não tiver equipe interna, sugere terceirizada
+      setDispatchTab('contractor');
     }
   };
 
-  // Visão Celular do Técnico (< 768px)
   if (isMobile) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-2">
@@ -164,7 +229,8 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Cabeçalho do Dashboard */}
+      
+      {/* HEADER PRINCIPAL */}
       <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <div className="bg-sky-500/20 p-2.5 rounded-lg border border-sky-500/30">
@@ -197,9 +263,10 @@ export default function App() {
         </div>
       </header>
 
-      {/* Conteúdo Principal */}
+      {/* ÁREA DE CONTEÚDO PRINCIPAL */}
       <main className="p-6 max-w-7xl mx-auto w-full space-y-6">
-        {/* KPI Indicators */}
+        
+        {/* CARDS DE INDICADORES (KPIs) */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center justify-between">
             <div>
@@ -231,7 +298,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Mapa em Tempo Real */}
+        {/* MAPA INTERATIVO */}
         <div className="space-y-2">
           <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
             📍 Localização da Frota em Tempo Real (Visão Geral)
@@ -244,12 +311,13 @@ export default function App() {
           />
         </div>
 
-        {/* Grid do Painel (Chamados + Lista de Técnicos) */}
+        {/* PAINÉIS DE CHAMADOS E TÉCNICOS */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Painel Esquerdo: Chamados Pendentes com Despacho Rápido */}
+          
+          {/* PAINEL DE CHAMADOS */}
           <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
             <h2 className="text-sm font-bold text-white tracking-wide uppercase flex items-center gap-2 border-b border-slate-800 pb-3">
-              <AlertTriangle className="w-4 h-4 text-amber-400" /> Chamados Pendentes
+              <AlertTriangle className="w-4 h-4 text-amber-400" /> Chamados em Operação
             </h2>
 
             <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
@@ -257,7 +325,7 @@ export default function App() {
                 <div 
                   key={t.id} 
                   onClick={() => { if (t.status === 'pending') { setSelectedTicket(t); setDispatchTab('internal'); } }} 
-                  className={`bg-slate-950 border rounded-lg p-4 space-y-3 cursor-pointer transition ${t.status === 'pending' ? 'border-sky-500/40 hover:border-sky-400' : 'border-slate-800 opacity-60'}`}
+                  className={`bg-slate-950 border rounded-lg p-4 space-y-3 transition ${t.status === 'pending' ? 'border-sky-500/40 hover:border-sky-400 cursor-pointer' : 'border-slate-800 opacity-80'}`}
                 >
                   <div className="flex items-start justify-between">
                     <div>
@@ -269,9 +337,12 @@ export default function App() {
                     </span>
                   </div>
 
-                  <div className="text-xs text-slate-400 space-y-1">
+                  <div className="text-xs text-slate-400 space-y-2">
                     <p>📍 {t.location?.address}</p>
-                    <p>Situação: <span className="text-sky-300 font-medium uppercase">{t.status === 'pending' ? 'Pendente' : t.status}</span></p>
+                    <div className="flex items-center gap-2 pt-1 border-t border-slate-900">
+                      <span className="text-[11px] text-slate-500 font-medium">Status:</span>
+                      {renderTicketStatusBadge(t.status)}
+                    </div>
                   </div>
 
                   {t.status === 'pending' && (
@@ -289,7 +360,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Painel Direito: Situação dos Técnicos */}
+          {/* PAINEL DE TÉCNICOS EM CAMPO */}
           <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
             <h2 className="text-sm font-bold text-white tracking-wide uppercase flex items-center gap-2 border-b border-slate-800 pb-3">
               <Users className="w-4 h-4 text-sky-400" /> Situação dos Técnicos em Campo
@@ -303,7 +374,7 @@ export default function App() {
                       <h4 className="text-sm font-semibold text-slate-100">{tech.name} <span className="text-xs text-slate-500 font-normal">(Equipe {tech.team})</span></h4>
                       <p className="text-xs text-slate-400">📍 {tech.location?.address}</p>
                     </div>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${tech.status === 'available' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-sky-500/10 text-sky-400'}`}>{tech.status === 'available' ? 'Disponível' : tech.status === 'traveling' ? 'Em Deslocamento' : 'Em Atendimento'}</span>
+                    {renderTechStatusBadge(tech.status)}
                   </div>
 
                   <div className="flex flex-wrap gap-1">
@@ -314,13 +385,60 @@ export default function App() {
               ))}
             </div>
           </div>
+
         </div>
       </main>
 
-      {/* Painel do Administrador */}
+      {/* MODAL DE CONFIRMAÇÃO ESTILIZADO (DESPACHO INTELIGENTE) */}
+      {quickDispatchModalData && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex justify-center items-center p-4">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl shadow-amber-500/10 text-center animate-in fade-in zoom-in duration-200">
+            <div className="w-12 h-12 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-full flex items-center justify-center mx-auto">
+              <Zap className="w-6 h-6 fill-current animate-bounce" />
+            </div>
+            
+            <div>
+              <h3 className="text-base font-extrabold text-white uppercase tracking-wider">
+                Alocação Rápida Concluída!
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Técnico notificado e rota gerada com sucesso.
+              </p>
+            </div>
+
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 text-left space-y-2 text-xs font-mono">
+              <div className="flex justify-between border-b border-slate-900 pb-1.5">
+                <span className="text-slate-400">Chamado:</span>
+                <strong className="text-sky-400 font-bold">{quickDispatchModalData.code}</strong>
+              </div>
+              <div className="flex justify-between border-b border-slate-900 pb-1.5">
+                <span className="text-slate-400">Dupla / Técnico:</span>
+                <strong className="text-white">{quickDispatchModalData.techName}</strong>
+              </div>
+              <div className="flex justify-between border-b border-slate-900 pb-1.5">
+                <span className="text-slate-400">Distância:</span>
+                <strong className="text-slate-200">{quickDispatchModalData.distanceKm} km</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Previsão Chegada:</span>
+                <strong className="text-amber-400">{quickDispatchModalData.etaMinutes} min</strong>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setQuickDispatchModalData(null)}
+              className="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs py-3 rounded-xl shadow-lg shadow-amber-500/10 transition"
+            >
+              Ok, Entendido
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* COMPONENTES MODAIS AUXILIARES */}
       <AdminPanel isOpen={isAdminPanelOpen} onClose={() => setIsAdminPanelOpen(false)} />
 
-      {/* Modal de Cadastro de Novo Chamado */}
+      {/* MODAL: NOVO CHAMADO */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex justify-center items-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
@@ -377,20 +495,22 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL DE DESPACHO UNIFICADO (INTERNA + TERCEIRIZADA COM ANÁLISE FINANCEIRA) */}
+      {/* MODAL: DESPACHO MANUAL & TERCEIRIZADAS */}
       {selectedTicket && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex justify-center items-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-2xl w-full space-y-4 shadow-2xl max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-start border-b border-slate-800 pb-3">
               <div>
-                <span className="text-xs font-mono text-sky-400">{selectedTicket.code}</span>
-                <h3 className="text-lg font-bold text-white">{selectedTicket.title}</h3>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-sky-400 font-bold">{selectedTicket.code}</span>
+                  {renderTicketStatusBadge(selectedTicket.status)}
+                </div>
+                <h3 className="text-lg font-bold text-white mt-1">{selectedTicket.title}</h3>
                 <p className="text-xs text-slate-400">📍 Local: <strong className="text-slate-200">{selectedTicket.location?.address}</strong></p>
               </div>
               <button onClick={() => setSelectedTicket(null)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
             </div>
 
-            {/* Chaveador de Modalidades */}
             <div className="grid grid-cols-2 gap-2 bg-slate-950 p-1 rounded-lg border border-slate-800">
               <button
                 onClick={() => setDispatchTab('internal')}
@@ -411,7 +531,8 @@ export default function App() {
             </div>
 
             <div className="overflow-y-auto space-y-3 pr-1 flex-1">
-              {/* ABA 1: EQUIPES INTERNAS */}
+              
+              {/* ABA 1: EQUIPES INTERNAS RECOMENDADAS */}
               {dispatchTab === 'internal' && (
                 <div className="space-y-3">
                   <h4 className="text-xs font-bold uppercase text-slate-400 tracking-wider">Técnicos Mais Indicados por Algoritmo de Geopexel</h4>
@@ -461,7 +582,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* ABA 2: TERCEIRIZADAS COM CÁLCULO DE CUSTO REAL */}
+              {/* ABA 2: EMPRESAS TERCEIRIZADAS */}
               {dispatchTab === 'contractor' && (
                 <div className="space-y-3">
                   <h4 className="text-xs font-bold text-amber-400 flex items-center gap-1"><Building2 className="w-4 h-4" /> Credenciadas & Simulação Financeira de Transbordo</h4>
@@ -480,7 +601,6 @@ export default function App() {
                           </button>
                         </div>
 
-                        {/* Breakdown Financeiro */}
                         {cost && (
                           <div className="bg-slate-900 border border-slate-800/80 p-3 rounded-lg space-y-1.5 text-xs font-mono">
                             <div className="flex justify-between text-slate-400">
@@ -508,12 +628,13 @@ export default function App() {
                   })}
                 </div>
               )}
+
             </div>
           </div>
         </div>
       )}
 
-      {/* Outras Modais */}
+      {/* OUTRAS MODAIS */}
       {isTechMobileOpen && <TechMobileView technicians={technicians} tickets={tickets} onClose={() => setIsTechMobileOpen(false)} />}
       {isAnalyticsOpen && <AnalyticsModal tickets={tickets} technicians={technicians} contractors={contractors} onClose={() => setIsAnalyticsOpen(false)} />}
     </div>

@@ -110,7 +110,7 @@ export const updateTechTicketStatus = async (ticketId, techId, ticketStatus, tec
 
     await update(ref(db, `technicians/${techId}`), {
       status: techStatus,
-      currentTicketId: ticketStatus === 'resolved' ? null : ticketId
+      currentTicketId: ticketStatus === 'resolved' || ticketStatus === 'completed' ? null : ticketId
     });
 
     return { success: true };
@@ -129,6 +129,24 @@ export const updateTechStatusInDB = async (techId, techStatus) => {
     return { success: true };
   } catch (error) {
     console.error("Erro ao atualizar status do técnico:", error);
+    return { success: false, error };
+  }
+};
+
+/**
+ * Funções adicionadas para compatibilidade direta com as views da aplicação
+ */
+export const updateTechStatus = updateTechStatusInDB;
+
+export const updateTicketStatus = async (ticketId, status) => {
+  try {
+    await update(ref(db, `tickets/${ticketId}`), {
+      status: status,
+      updatedAt: Date.now()
+    });
+    return { success: true };
+  } catch (error) {
+    console.error("Erro ao atualizar status do chamado:", error);
     return { success: false, error };
   }
 };
