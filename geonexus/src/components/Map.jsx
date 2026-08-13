@@ -5,6 +5,10 @@ import 'leaflet/dist/leaflet.css';
 import { fetchRealRouteWithTraffic } from '../services/geoService';
 import { updateTechLocationInDB } from '../services/dbService';
 
+// ============================================================================
+// GERADORES DE MARCADORES PERSONALIZADOS (LEAFLET DIV-ICON)
+// ============================================================================
+
 // Marcadores Visuais das Duplas Técnicas
 const createTechIcon = (isSimulating = false, status = 'available') => {
   let bg = 'bg-emerald-500 shadow-emerald-500/50';
@@ -35,15 +39,27 @@ const createTechIcon = (isSimulating = false, status = 'available') => {
   });
 };
 
-// Marcadores Visuais das Ocorrências
-const createTicketIcon = (severity) => {
+// Marcadores Visuais das Ocorrências (Status Concluído = Ícone Verde ✅)
+const createTicketIcon = (severity, status) => {
   const sev = severity?.toLowerCase();
+  const st = status?.toLowerCase();
+
+  const isCompleted = ['completed', 'resolved', 'concluido', 'resolvido'].includes(st);
+
   let bg = 'bg-amber-500 shadow-amber-500/50';
   let symbol = '⚠️';
+  let border = 'border-slate-900';
+  let animation = '';
 
-  if (sev === 'critical') {
-    bg = 'bg-red-600 shadow-red-600/60 animate-bounce';
+  if (isCompleted) {
+    bg = 'bg-emerald-700 shadow-emerald-700/50';
+    symbol = '✅';
+    border = 'border-emerald-400';
+    animation = ''; 
+  } else if (sev === 'critical') {
+    bg = 'bg-red-600 shadow-red-600/60';
     symbol = '🔥';
+    animation = 'animate-bounce'; 
   } else if (sev === 'low') {
     bg = 'bg-sky-500 shadow-sky-500/50';
     symbol = '🔧';
@@ -52,9 +68,9 @@ const createTicketIcon = (severity) => {
   return L.divIcon({
     className: 'custom-ticket-pin',
     html: `
-      <div class="relative flex items-center justify-center w-9 h-9 ${bg} text-white rounded-xl shadow-xl border-2 border-slate-900">
+      <div class="relative flex items-center justify-center w-9 h-9 ${bg} ${animation} text-white rounded-xl shadow-xl border-2 ${border}">
         <span class="text-xs font-bold">${symbol}</span>
-        <span class="absolute -bottom-1 w-2.5 h-2.5 ${bg} rotate-45 border-r border-b border-slate-900"></span>
+        <span class="absolute -bottom-1 w-2.5 h-2.5 ${bg} rotate-45 border-r border-b ${border}"></span>
       </div>
     `,
     iconSize: [36, 36],
@@ -68,6 +84,7 @@ const traduzirGravidade = (severity) => {
   return mapa[severity?.toLowerCase()] || severity;
 };
 
+// Componente para a câmera acompanhar o técnico em simulação
 function CameraFollower({ position, active }) {
   const map = useMap();
   useEffect(() => {
@@ -77,6 +94,10 @@ function CameraFollower({ position, active }) {
   }, [position, active, map]);
   return null;
 }
+
+// ============================================================================
+// COMPONENTE PRINCIPAL DO MAPA
+// ============================================================================
 
 export default function Map({ technicians = [], tickets = [], onSelectTicket, activeTicketForRoute }) {
   const defaultCenter = [-20.3155, -40.3128]; // Vitória-ES
@@ -98,16 +119,25 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
   const handleAnchorJump = async (pointKey) => {
     if (!activeTech) return;
     const targetPoint = anchorPoints[pointKey];
-    setSimulatedLocation([targetPoint.lat, targetPoint.lng]);
+    
+    // Reseta a simulação de rota ao usar atalhos
+    setIsSimulating(false);
+    setSimulatedLocation(null);
+    setRouteData(null);
 
     if (typeof updateTechLocationInDB === 'function') {
       await updateTechLocationInDB(activeTech.id, targetPoint);
     }
   };
 
+  // ACIONADOR DA TELEMETRIA / MODO PITCH (INICIAR / PAUSAR)
   const handleStartPitchSimulation = async () => {
+    // Se estiver simulando, ao clicar em Pausar ele reseta para o estado da frota
     if (isSimulating) {
       setIsSimulating(false);
+      setSimulatedLocation(null);
+      setRouteData(null);
+      setCurrentStep(0);
       return;
     }
 
@@ -141,7 +171,15 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
     setIsLoadingRoute(false);
   };
 
-  // Atualização GPS Ultra-Rápida a cada 300ms (Velocidade 5x para o Pitch)
+  // REINICIAR A SIMULAÇÃO DO INÍCIO DA ROTA
+  const handleRestartPitchSimulation = () => {
+    if (!routeData?.coordinates?.length) return;
+    setCurrentStep(0);
+    setSimulatedLocation(routeData.coordinates[0]);
+    setIsSimulating(true);
+  };
+
+  // Atualização GPS Ultra-Rápida a cada 300ms (5x velocidade)
   useEffect(() => {
     if (!isSimulating || !routeData?.coordinates) return;
 
@@ -161,7 +199,7 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
 
         return next;
       });
-    }, 300); // 300ms = 5x mais rápido que o normal
+    }, 300);
 
     return () => clearInterval(timer);
   }, [isSimulating, routeData, activeTech]);
@@ -172,7 +210,7 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
 
   return (
     <div className="w-full flex flex-col font-sans relative">
-      {/* Cabeçalho do Mapa */}
+      {/* CABEÇALHO DO MAPA */}
       <div className="flex flex-wrap justify-between items-center bg-slate-900 border border-slate-800 p-3 rounded-t-xl gap-2 z-20">
         <div className="flex items-center gap-2">
           <span className={`w-2.5 h-2.5 rounded-full ${isSimulating ? 'bg-amber-400 animate-ping' : 'bg-emerald-500'}`}></span>
@@ -181,7 +219,7 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
           </span>
         </div>
 
-        {/* Botoes de Ancoragem Rápida */}
+        {/* Atalhos de Posição */}
         <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800">
           <span className="text-[10px] text-slate-400 uppercase font-bold px-1.5">Atalhos:</span>
           <button
@@ -204,26 +242,42 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
           </button>
         </div>
 
-        <button
-          onClick={handleStartPitchSimulation}
-          disabled={isLoadingRoute}
-          className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 shadow-lg ${
-            isSimulating
-              ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-amber-500/20'
-              : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/30'
-          } ${isLoadingRoute ? 'opacity-50 cursor-not-allowed' : ''}`}
-        >
-          {isLoadingRoute ? (
-            <span>⏳ Traçando Rota...</span>
-          ) : isSimulating ? (
-            <span>⏸ Pausar Telemetria</span>
-          ) : (
-            <span>⚡ Rastreamento Modo Pitch (5x)</span>
+        {/* GRUPO DE BOTÕES DE CONTROLE DE TELEMETRIA */}
+        <div className="flex items-center gap-2">
+          
+          {/* BOTÃO REINICIAR */}
+          {isSimulating && (
+            <button
+              onClick={handleRestartPitchSimulation}
+              className="px-3 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30 shadow-lg active:scale-95"
+              title="Reiniciar rota do ponto inicial"
+            >
+              🔄 Reiniciar
+            </button>
           )}
-        </button>
+
+          {/* BOTÃO PRINCIPAL (INICIAR / PAUSAR) */}
+          <button
+            onClick={handleStartPitchSimulation}
+            disabled={isLoadingRoute}
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 shadow-lg ${
+              isSimulating
+                ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-amber-500/20'
+                : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/30'
+            } ${isLoadingRoute ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            {isLoadingRoute ? (
+              <span>⏳ Traçando Rota...</span>
+            ) : isSimulating ? (
+              <span>⏹ Pausar Telemetria</span>
+            ) : (
+              <span>⚡ Rastreamento Modo Pitch (5x)</span>
+            )}
+          </button>
+        </div>
       </div>
 
-      {/* Renderização do Mapa */}
+      {/* RENDERIZAÇÃO DO MAPA */}
       <div className="h-[480px] w-full rounded-b-xl overflow-hidden border-x border-b border-slate-800 relative z-10">
         
         {/* LEGENDA FLUTUANTE */}
@@ -250,7 +304,7 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
           </div>
 
           <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
-            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Gravidade do Problema</span>
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Gravidade / Status</span>
             <div className="flex items-center gap-2 text-slate-300">
               <span className="w-5 h-5 rounded-lg bg-red-600 flex items-center justify-center text-[10px] text-white font-bold border border-slate-900">🔥</span>
               <span className="text-[11px]">Urgência Crítica</span>
@@ -262,6 +316,10 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
             <div className="flex items-center gap-2 text-slate-300">
               <span className="w-5 h-5 rounded-lg bg-sky-500 flex items-center justify-center text-[10px] text-white font-bold border border-slate-900">🔧</span>
               <span className="text-[11px]">Urgência Baixa</span>
+            </div>
+            <div className="flex items-center gap-2 text-slate-300">
+              <span className="w-5 h-5 rounded-lg bg-emerald-700 border border-emerald-400 flex items-center justify-center text-[10px] text-white font-bold">✅</span>
+              <span className="text-[11px] text-emerald-400 font-bold">Chamado Concluído</span>
             </div>
           </div>
         </div>
@@ -276,17 +334,19 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
 
           <CameraFollower position={simulatedLocation} active={isSimulating} />
 
-          {remainingPath.length > 0 && (
+          {/* ROTA DESENHADA */}
+          {isSimulating && remainingPath.length > 0 && (
             <Polyline
               positions={remainingPath}
               color={routeData?.trafficStatus === 'heavy' ? '#ef4444' : '#f59e0b'}
               weight={5}
               opacity={0.85}
-              dashArray={isSimulating ? '6, 8' : undefined}
+              dashArray="6, 8"
             />
           )}
 
-          {simulatedLocation && (
+          {/* PINO SIMULADO */}
+          {isSimulating && simulatedLocation && (
             <Marker position={simulatedLocation} icon={createTechIcon(true)}>
               <Popup>
                 <div className="p-1 text-slate-900 font-sans">
@@ -298,7 +358,8 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
             </Marker>
           )}
 
-          {!simulatedLocation &&
+          {/* PINOS DAS DUPLAS TÉCNICAS */}
+          {!isSimulating &&
             technicians?.map((tech) => tech.location && (
               <Marker key={`tech-${tech.id}`} position={[tech.location.lat, tech.location.lng]} icon={createTechIcon(false, tech.status)}>
                 <Popup>
@@ -313,18 +374,36 @@ export default function Map({ technicians = [], tickets = [], onSelectTicket, ac
               </Marker>
             ))}
 
+          {/* PINOS DOS CHAMADOS (TICKETS) */}
           {tickets?.map((ticket) => ticket.location && (
             <Marker
               key={`ticket-${ticket.id}`}
               position={[ticket.location.lat, ticket.location.lng]}
-              icon={createTicketIcon(ticket.severity)}
+              icon={createTicketIcon(ticket.severity, ticket.status)}
               eventHandlers={{
-                click: () => onSelectTicket && onSelectTicket(ticket)
+                click: () => {
+                  const statusNormalized = ticket.status?.toLowerCase();
+                  const isCompleted = ['completed', 'resolved', 'concluido', 'resolvido'].includes(statusNormalized);
+
+                  // Se a tarefa estiver concluída/resolvida, BLOQUEIA a abertura do modal de despacho
+                  if (isCompleted) {
+                    return;
+                  }
+
+                  if (onSelectTicket) {
+                    onSelectTicket(ticket);
+                  }
+                }
               }}
             >
               <Popup>
                 <div className="text-slate-900 font-sans p-1">
-                  <span className="text-xs font-mono font-bold text-red-600">{ticket.code}</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-mono font-bold text-sky-700">{ticket.code}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 text-slate-800 rounded font-bold uppercase">
+                      {ticket.status}
+                    </span>
+                  </div>
                   <strong className="block text-sm mt-0.5">{ticket.title}</strong>
                   <p className="text-xs text-slate-600 mt-1">
                     Gravidade: <strong>{traduzirGravidade(ticket.severity)}</strong>
