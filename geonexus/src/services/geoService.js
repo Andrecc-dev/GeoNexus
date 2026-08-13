@@ -6,6 +6,7 @@
  * Cálculo de distância em linha reta (Fórmula de Haversine) em km
  */
 export const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
   const R = 6371; // Raio da Terra em km
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
@@ -24,6 +25,8 @@ export const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
  */
 export const fetchRealRouteWithTraffic = async (startLat, startLng, endLat, endLng) => {
   try {
+    if (!startLat || !startLng || !endLat || !endLng) throw new Error("Coordenadas inválidas");
+
     const url = `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`;
     const response = await fetch(url);
     const data = await response.json();
@@ -74,7 +77,7 @@ export const rankTechniciansForTicket = (ticket, technicians) => {
 
   return technicians
     .map((tech) => {
-      if (!tech.location?.lat || !tech.location?.lng) return null;
+      if (!tech.location?.lat || !tech.location?.lng || !ticket?.location?.lat || !ticket?.location?.lng) return null;
 
       // Validação de Habilidades e Normas Regulamentadoras (NRs)
       const hasAllSkills = requiredSkills.every((skill) =>
@@ -125,26 +128,137 @@ export const rankTechniciansForTicket = (ticket, technicians) => {
  */
 export const findBestTechForTicket = (ticket, technicians = []) => {
   const ranked = rankTechniciansForTicket(ticket, technicians);
-  // Prioriza técnicos com status 'available', caso contrário pega o maior score
   return ranked.find((tech) => tech.status === 'available') || ranked[0] || null;
 };
 
 /**
- * Geocodificação de Endereço via Nominatim OpenStreetMap
+ * Busca inteligente de CEP (BrasilAPI v2 -> ViaCEP + Nominatim)
  */
-export const getCoordinatesFromAddress = async (address) => {
+export const searchAddressByCEP = async (cep) => {
   try {
-    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`);
-    const data = await res.json();
-    if (data && data.length > 0) {
+    const cleanCep = String(cep).replace(/\D/g, '');
+    if (cleanCep.length !== 8) return null;
+
+    // 1. Tenta BrasilAPI v2 (Retorna Lat/Lng diretas)
+    try {
+      const bRes = await fetch(`https://brasilapi.com.br/api/cep/v2/${cleanCep}`);
+      if (bRes.ok) {
+        const bData = await bRes.json();
+        if (bData.location?.coordinates?.latitude && bData.location?.coordinates?.longitude) {
+          const lat = parseFloat(bData.location.coordinates.latitude);
+          const lng = parseFloat(bData.location.coordinates.longitude);
+          if (!isNaN(lat) && !isNaN(lng) && lat !== 0) {
+            return {
+              address: `${bData.street || ''}, ${bData.neighborhood || ''} - ${bData.city}/${bData.state}`,
+              lat,
+              lng
+            };
+          }
+        }
+      }
+    } catch (e) {
+      // Segue para a próxima API se falhar
+    }
+
+    // 2. Tenta ViaCEP e converte o nome da rua em GPS via Nominatim
+    const viaRes = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+    const viaData = await viaRes.json();
+
+    if (viaData.erro) return null;
+
+    const fullStreet = `${viaData.logradouro || ''}, ${viaData.bairro || ''}, ${viaData.localidade} - ${viaData.uf}, Brasil`;
+
+    const geoRes = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(fullStreet)}&limit=1`,
+      { headers: { 'User-Agent': 'GeoNexus-App' } }
+    );
+    const geoData = await geoRes.json();
+
+    if (geoData && geoData.length > 0) {
       return {
-        lat: parseFloat(data[0].lat),
-        lng: parseFloat(data[0].lon),
-        address: data[0].display_name
+        address: fullStreet,
+        lat: parseFloat(geoData[0].lat),
+        lng: parseFloat(geoData[0].lon)
       };
     }
+
+    // Fallback para o centro da cidade do CEP
+    const cityStreet = `${viaData.localidade} - ${viaData.uf}, Brasil`;
+    const cityRes = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(cityStreet)}&limit=1`,
+      { headers: { 'User-Agent': 'GeoNexus-App' } }
+    );
+    const cityData = await cityRes.json();
+
+    if (cityData && cityData.length > 0) {
+      return {
+        address: fullStreet,
+        lat: parseFloat(cityData[0].lat),
+        lng: parseFloat(cityData[0].lon)
+      };
+    }
+
   } catch (err) {
-    console.error("Erro no Geocoding Nominatim:", err);
+    console.error("Erro ao buscar por CEP:", err);
   }
-  return { lat: -20.3155, lng: -40.3128, address }; // Fallback Vitória-ES
+  return null;
+};
+
+/**
+ * Geocodificação Universal de Endereço ou CEP
+ */
+/**
+ * Geocodificação Universal em Camadas (Endereço Completo -> Simplificado -> Cidade -> Fallback)
+ */
+export const getCoordinatesFromAddress = async (address) => {
+  if (!address) return { lat: -20.3155, lng: -40.3128, address: "Vitória - ES" };
+
+  // 1. Se for CEP puro (8 dígitos com ou sem hífen)
+  const cleanInput = String(address).replace(/\D/g, '');
+  if (cleanInput.length === 8) {
+    const cepResult = await searchAddressByCEP(cleanInput);
+    if (cepResult) return cepResult;
+  }
+
+  // Função auxiliar de requisição ao Nominatim
+  const fetchNominatim = async (queryText) => {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(queryText)}&limit=1`,
+        { headers: { 'User-Agent': 'GeoNexus-App' } }
+      );
+      const data = await res.json();
+      if (data && data.length > 0) {
+        return {
+          lat: parseFloat(data[0].lat),
+          lng: parseFloat(data[0].lon),
+          address: data[0].display_name
+        };
+      }
+    } catch (err) {
+      console.error("Erro na consulta do mapa:", err);
+    }
+    return null;
+  };
+
+  // TENTATIVA 1: Endereço completo digitado
+  let result = await fetchNominatim(address);
+  if (result) return result;
+
+  // TENTATIVA 2: Limpeza de hífens e do termo "Centro"
+  const cleanedAddress = address.replace(/-/g, ' ').replace(/Centro/gi, '').replace(/\s+/g, ' ').trim();
+  result = await fetchNominatim(cleanedAddress);
+  if (result) return result;
+
+  // TENTATIVA 3: Busca apenas Cidade e Estado (Garante a localização no município correto)
+  const addressParts = address.split(/[-,]/).map(p => p.trim()).filter(Boolean);
+  if (addressParts.length >= 2) {
+    // Pega os dois últimos elementos (ex: "Alfredo Chaves" e "ES")
+    const cityState = `${addressParts[addressParts.length - 2]}, ${addressParts[addressParts.length - 1]}, Brasil`;
+    result = await fetchNominatim(cityState);
+    if (result) return result;
+  }
+
+  // TENTATIVA 4: Fallback de Segurança caso não ache nada
+  return { lat: -20.3155, lng: -40.3128, address };
 };

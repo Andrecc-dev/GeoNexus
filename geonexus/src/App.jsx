@@ -9,7 +9,6 @@ import {
 import { seedDatabase, subscribeToCollection, createTicketInDB, dispatchTicketToTech, dispatchTicketToContractor } from './services/dbService';
 import { rankTechniciansForTicket, getCoordinatesFromAddress, findBestTechForTicket } from './services/geoService';
 import { calculateContractorCost } from './services/contratoService';
-import { getAddressFromCep } from './utils/geoUtils';
 
 // Importação de Componentes
 import Map from './components/Map';
@@ -104,7 +103,7 @@ export default function App() {
   const [isTechMobileOpen, setIsTechMobileOpen] = useState(false);
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
   
-  // Estado para controlar a caixinha bonitinha do Despacho Rápido
+  // Estado para controlar o Modal do Despacho Inteligente
   const [quickDispatchModalData, setQuickDispatchModalData] = useState(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -133,19 +132,24 @@ export default function App() {
     };
   }, []);
 
+  // Busca CEP Integrada diretamente com a Geocodificação do GeoService
   const handleCepSearch = async () => {
-    if (!cep || cep.replace(/\D/g, '').length !== 8) return;
+    const cleanCep = cep.replace(/\D/g, '');
+    if (!cleanCep || cleanCep.length !== 8) return;
+
     setIsSearchingCep(true);
-    if (typeof getAddressFromCep === 'function') {
-      const result = await getAddressFromCep(cep);
-      if (result) {
-        setNewAddress(result.address);
-        setCurrentCoords({ lat: result.lat, lng: result.lng, address: result.address });
-      }
+    const result = await getCoordinatesFromAddress(cleanCep);
+
+    if (result && result.lat && !isNaN(result.lat)) {
+      setNewAddress(result.address);
+      setCurrentCoords(result);
+    } else {
+      alert("Não foi possível obter o GPS exato do CEP. Por favor, ajuste o nome do município ou rua abaixo.");
     }
     setIsSearchingCep(false);
   };
 
+  // Criação de Chamados com Garantia de Coordenadas
   const handleCreateTicket = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -153,7 +157,12 @@ export default function App() {
     try {
       const newId = `ticket_${Date.now()}`;
       const newCode = `#${Math.floor(1000 + Math.random() * 9000)}`;
-      const locationCoords = currentCoords || await getCoordinatesFromAddress(newAddress);
+
+      // Garante que se currentCoords estiver nulo ou inválido, o sistema busca na API pelo texto
+      let locationCoords = currentCoords;
+      if (!locationCoords || !locationCoords.lat || isNaN(locationCoords.lat)) {
+        locationCoords = await getCoordinatesFromAddress(newAddress);
+      }
 
       const newTicket = {
         id: newId,
@@ -172,9 +181,12 @@ export default function App() {
       };
 
       await createTicketInDB(newTicket);
+
+      // Reseta o formulário
       setIsCreateModalOpen(false);
       setNewTitle('');
       setCep('');
+      setNewAddress('Vitória - ES');
       setCurrentCoords(null);
     } catch (error) {
       console.error("Erro ao criar chamado:", error);
@@ -200,7 +212,6 @@ export default function App() {
     if (bestTech) {
       await dispatchTicketToTech(ticket.id, bestTech.id);
       
-      // Exibe a caixinha bonitinha customizada em vez do alert()
       setQuickDispatchModalData({
         code: ticket.code,
         techName: bestTech.name,
@@ -232,10 +243,17 @@ export default function App() {
       
       {/* HEADER PRINCIPAL */}
       <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center gap-3">
           <div className="bg-sky-500/20 p-2.5 rounded-lg border border-sky-500/30">
             <Activity className="w-6 h-6 text-sky-400 animate-pulse" />
           </div>
+          
+          <img 
+            src="/logo.jpg" 
+            alt="GeoNexus Logo" 
+            className="w-10 h-10 object-contain rounded-lg bg-white p-0.5 shadow-md shrink-0"
+          />
+          
           <div>
             <h1 className="text-xl font-bold text-white flex items-center gap-2">
               GeoNexus <span className="text-xs font-normal text-sky-400 bg-sky-950 border border-sky-800 px-2 py-0.5 rounded-full">Painel do Administrador</span>
@@ -481,7 +499,15 @@ export default function App() {
 
               <div>
                 <label className="text-xs font-medium text-slate-300">Endereço Completo ou Município</label>
-                <input type="text" value={newAddress} onChange={(e) => setNewAddress(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-white mt-1" />
+                <input 
+                  type="text" 
+                  value={newAddress} 
+                  onChange={(e) => {
+                    setNewAddress(e.target.value);
+                    setCurrentCoords(null); // Reseta o cache de coordenadas ao alterar o texto manualmente
+                  }} 
+                  className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-white mt-1" 
+                />
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
