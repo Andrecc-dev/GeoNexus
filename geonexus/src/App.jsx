@@ -132,24 +132,67 @@ export default function App() {
     };
   }, []);
 
-  // Busca CEP Integrada diretamente com a Geocodificação do GeoService
+  // Busca CEP Integrada com ViaCEP + Geocodificação OpenStreetMap
   const handleCepSearch = async () => {
     const cleanCep = cep.replace(/\D/g, '');
-    if (!cleanCep || cleanCep.length !== 8) return;
+    if (!cleanCep || cleanCep.length !== 8) {
+      alert("Por favor, digite um CEP válido com 8 dígitos.");
+      return;
+    }
 
     setIsSearchingCep(true);
-    const result = await getCoordinatesFromAddress(cleanCep);
 
-    if (result && result.lat && !isNaN(result.lat)) {
-      setNewAddress(result.address);
-      setCurrentCoords(result);
-    } else {
-      alert("Não foi possível obter o GPS exato do CEP. Por favor, ajuste o nome do município ou rua abaixo.");
+    try {
+      // 1. Consulta o ViaCEP para converter o CEP em endereço textual seguro
+      const res = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+      const viaCepData = await res.json();
+
+      if (viaCepData.erro) {
+        alert("CEP não encontrado na base dos Correios.");
+        setIsSearchingCep(false);
+        return;
+      }
+
+      // 2. Monta o texto de endereço ignorando campos com "S/N" ou vazios
+      const partes = [];
+      if (viaCepData.logradouro && !viaCepData.logradouro.includes("S/N")) {
+        partes.push(viaCepData.logradouro);
+      }
+      if (viaCepData.bairro && viaCepData.bairro !== "Centro") {
+        partes.push(viaCepData.bairro);
+      }
+      if (viaCepData.localidade) {
+        partes.push(viaCepData.localidade);
+      }
+      if (viaCepData.uf) {
+        partes.push(viaCepData.uf);
+      }
+
+      const enderecoFormatado = partes.length > 0 ? partes.join(', ') : `${viaCepData.localidade} - ${viaCepData.uf}`;
+
+      // Atualiza o campo de entrada para o nome da cidade/rua
+      setNewAddress(enderecoFormatado);
+
+      // 3. Obtém as coordenadas GPS exatas no mapa a partir do texto amigável
+      const coords = await getCoordinatesFromAddress(enderecoFormatado);
+
+      if (coords && coords.lat && !isNaN(coords.lat)) {
+        setCurrentCoords({
+          ...coords,
+          address: enderecoFormatado
+        });
+      } else {
+        alert(`Endereço localizado (${enderecoFormatado}), mas pode ser necessário informar a rua para maior precisão.`);
+      }
+    } catch (error) {
+      console.error("Erro ao buscar CEP:", error);
+      alert("Erro ao consultar CEP. Tente digitar o nome da cidade/rua manualmente.");
+    } finally {
+      setIsSearchingCep(false);
     }
-    setIsSearchingCep(false);
   };
 
-  // Criação de Chamados com Garantia de Coordenadas
+  // Criação de Chamados com Suporte a Apenas Números (CEP) e Garantia de Coordenadas
   const handleCreateTicket = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -158,10 +201,43 @@ export default function App() {
       const newId = `ticket_${Date.now()}`;
       const newCode = `#${Math.floor(1000 + Math.random() * 9000)}`;
 
-      // Garante que se currentCoords estiver nulo ou inválido, o sistema busca na API pelo texto
+      let finalAddress = newAddress.trim();
       let locationCoords = currentCoords;
+
+      // DETECTOR AUTOMÁTICO DE CEP DIGITADO NO CAMPO DE ENDEREÇO (SOMENTE NÚMEROS)
+      const cleanNumbers = finalAddress.replace(/\D/g, '');
+      const isPureCep = cleanNumbers.length === 8 && (finalAddress === cleanNumbers || finalAddress.replace('-', '').length === 8);
+
+      if (isPureCep) {
+        try {
+          const res = await fetch(`https://viacep.com.br/ws/${cleanNumbers}/json/`);
+          const viaCep = await res.json();
+
+          if (!viaCep.erro) {
+            const partes = [];
+            if (viaCep.logradouro && !viaCep.logradouro.includes("S/N")) partes.push(viaCep.logradouro);
+            if (viaCep.bairro && viaCep.bairro !== "Centro") partes.push(viaCep.bairro);
+            if (viaCep.localidade) partes.push(viaCep.localidade);
+            if (viaCep.uf) partes.push(viaCep.uf);
+
+            finalAddress = partes.length > 0 ? partes.join(', ') : `${viaCep.localidade} - ${viaCep.uf}`;
+          }
+        } catch (err) {
+          console.error("Erro na conversão automática de CEP numérico:", err);
+        }
+      }
+
+      // Garante a busca de coordenadas no mapa se ainda não existirem ou se o endereço mudou
       if (!locationCoords || !locationCoords.lat || isNaN(locationCoords.lat)) {
-        locationCoords = await getCoordinatesFromAddress(newAddress);
+        locationCoords = await getCoordinatesFromAddress(finalAddress);
+      }
+
+      // Garante que o endereço gravado no objeto de localização seja o nome textual legível
+      if (locationCoords) {
+        locationCoords = {
+          ...locationCoords,
+          address: finalAddress
+        };
       }
 
       const newTicket = {
